@@ -53,12 +53,14 @@ BEGIN_PROPERTIES
 NEW_PROP_TAG(EnableDryRun);
 NEW_PROP_TAG(OutputInterval);
 NEW_PROP_TAG(EnableLoggingFalloutWarning);
+NEW_PROP_TAG(EndStep);
 
 // TODO: enumeration parameters. we use strings for now.
 SET_STRING_PROP(EclFlowProblem, EnableDryRun, "auto");
 // Do not merge parallel output files or warn about them
 SET_BOOL_PROP(EclFlowProblem, EnableLoggingFalloutWarning, false);
 SET_INT_PROP(EclFlowProblem, OutputInterval, 1);
+SET_INT_PROP(EclFlowProblem, EndStep, std::numeric_limits<int>::max());
 
 END_PROPERTIES
 
@@ -97,6 +99,8 @@ namespace Opm
             EWOMS_REGISTER_PARAM(TypeTag, std::string, EnableDryRun,
                                  "Specify if the simulation ought to be actually run, or just pretended to be");
             EWOMS_REGISTER_PARAM(TypeTag, int, OutputInterval,
+                                 "Specify the number of report steps between two consecutive writes of restart data");
+            EWOMS_REGISTER_PARAM(TypeTag, int, EndStep,
                                  "Specify the number of report steps between two consecutive writes of restart data");
             EWOMS_REGISTER_PARAM(TypeTag, bool, EnableLoggingFalloutWarning,
                                  "Developer option to see whether logging was on non-root processors. In that case it will be appended to the *.DBG or *.PRT files");
@@ -491,10 +495,10 @@ namespace Opm
             const auto& timeMap = schedule.getTimeMap();
             auto& ioConfig = eclState().getIOConfig();
             SimulatorTimer simtimer;
-
+            size_t end_step = EWOMS_GET_PARAM(TypeTag, int, EndStep);
             // initialize variables
             const auto& initConfig = eclState().getInitConfig();
-            simtimer.init(timeMap, (size_t)initConfig.getRestartStep());
+            simtimer.init(timeMap, (size_t)initConfig.getRestartStep(), end_step);
 
             if (output_cout) {
                 std::ostringstream oss;
