@@ -884,6 +884,10 @@ public:
             lastRv_.resize(numDof, 0.0);
             maxOilSaturation_.resize(numDof, 0.0);
         }
+        pressure_[0].resize(numDof);
+        pressure_[1].resize(numDof);
+        totalSaturation_[0].resize(numDof, 1.0);
+        totalSaturation_[1].resize(numDof, 1.0);
 
         updateElementDepths_();
         readRockParameters_();
@@ -931,6 +935,9 @@ public:
             simulator.startNextEpisode(timeMap.getTimeStepLength(0));
             simulator.setEpisodeIndex(0);
         }
+        //this->updatePressure_(/*timeIdx*/ 0);
+        //this->updatePressure_(/*timeIdx*/ 1);
+        
     }
 
     void prefetch(const Element& elem) const
@@ -1100,6 +1107,8 @@ public:
         // used when ROCKCOMP is activated
         const bool invalidateFromMaxWaterSat = updateMaxWaterSaturation_();
         const bool invalidateFromMinPressure = updateMinPressure_();
+        this->updatePressureAndFluxes();//update stored pressure in case of sequential do not need to recalculate chach
+        //this->updateTotalSaturation();
         invalidateIntensiveQuantities = invalidateFromMaxWaterSat || invalidateFromMinPressure;
 
         if (invalidateIntensiveQuantities)
@@ -1184,7 +1193,7 @@ public:
 
         bool isSubStep = !EWOMS_GET_PARAM(TypeTag, bool, EnableWriteAllSolutions) && !this->simulator().episodeWillBeOver();
         eclWriter_->evalSummaryState(isSubStep);
-
+        this->writeExtra();
         auto& schedule = simulator.vanguard().schedule();
         auto& ecl_state = simulator.vanguard().eclState();
         int episodeIdx = simulator.episodeIndex();
@@ -1194,6 +1203,47 @@ public:
                            schedule,
                            simulator.vanguard().actionState(),
                            simulator.vanguard().summaryState());
+    }
+
+
+    void writeExtra(){
+        // Currently, the extra output is only for sequential simulation
+        if ( not(EWOMS_GET_PARAM(TypeTag, std::string, SimulationType) == "implicit") ) return;
+        std::string dir = this->simulator().problem().outputDir();
+        if (dir == ".") {
+            dir = "";
+        } else if (!dir.empty() && dir.back() != '/') {
+            dir += "/";
+        }
+        namespace fs = Opm::filesystem;
+        fs::path output_dir(dir);
+        fs::path subdir("extra_out");
+        output_dir = output_dir / subdir;
+        if (!(fs::exists(output_dir))) {
+            fs::create_directory(output_dir);
+        }
+        std::ostringstream oss;
+        oss << "totalsat_" << std::setw(4) << std::setfill('0') << this->simulator().episodeIndex() << "_time_";
+        oss << std::setprecision(15) << std::setw(12) << std::setfill('0') << this->simulator().time() << "_";
+        std::string output_file(oss.str());
+        fs::path full_path = output_dir / output_file;
+        std::string prefix = full_path.string() + ".txt";
+        {
+#if HAVE_MPI
+            //std::string filename = prefix + ename + "matrix_istl";
+#endif
+            std::ofstream file(prefix.c_str());
+            std::string simulationType  = EWOMS_GET_PARAM(TypeTag, std::string, SimulationType);
+            if(simulationType == "seq"){
+#ifndef NDEBUG                
+                Opm::LinearizationType linearizationType = this->simulator().model().linearizer().getLinearizationType();
+                assert(linearizationType.type == Opm::LinearizationType::seqtransport);
+#endif
+            }
+            for(const auto& v : totalSaturation_[0]){
+                file << v << std::endl;
+            }
+        }
     }
 
     /*!
@@ -1212,6 +1262,7 @@ public:
             simulator.setFinished(true);
             return;
         }
+        // Combine and return.
 
         // .. if we're not yet done, start the next episode (report step)
         simulator.startNextEpisode(timeMap.getTimeStepLength(episodeIdx + 1));
@@ -1955,6 +2006,42 @@ public:
         return minOilPressure_[globalDofIdx];
     }
 
+    /*!
+     * \brief Returns an element's pressure of the oil phase that was at the begining
+     * of the timestep need for sequential
+     *
+     */
+    Scalar pressure(unsigned globalDofIdx, unsigned phaseIndex, const unsigned timeIdx) const
+    {
+        // phase index is unused for now will give warning in compilation
+        return pressure_[timeIdx][globalDofIdx][phaseIndex];
+    }
+    Scalar totalSaturation(unsigned globalDofIdx, const unsigned timeIdx) const
+    {
+        return totalSaturation_[timeIdx][globalDofIdx];
+    }
+
+    const std::vector<Scalar>& getTotalSaturation(const unsigned timeIdx) const
+    {
+        return totalSaturation_[timeIdx];
+    }
+
+    void setTotalSaturation(std::vector<Scalar> totSat, const unsigned timeIdx)
+    {
+        totalSaturation_[timeIdx] = totSat;
+    }
+
+    void totalSaturationOne(const unsigned timeIdx){
+        for(auto& v : totalSaturation_[timeIdx]){
+            v=1.0;
+        }
+    }
+
+    Scalar totalFlux(unsigned globalIndex,unsigned loc_index) const{
+        //unsigned globalIndx = elemCtx.globalSpaceIndex(/*spaceIdx=*/0, /*timeIdx=*/0);
+        //for (unsigned scvfIdx = 0; scvfIdx < numInteriorFaces; scvfIdx++) {
+        return totalFlux_[globalIndex][loc_index];
+    }
 
     /*!
      * \brief Returns a reference to the ECL well manager used by the problem.
@@ -2103,7 +2190,51 @@ public:
 
         return overburdenPressure_[elementIdx];
     }
+    /*!
+     * \brief update pressure and totalSaturation
+     * update copy of pressure and total saturation for sequential solve
+     */
+    bool updateAllPressures(){
+        this->updatePressure_(0);
+        this->updatePressure_(1);
+        return true;
+    }
+    
+    bool updatePressureAndFluxes(){
+        // maybe use simulation type instead
+        std::string simulationtype  = EWOMS_GET_PARAM(TypeTag, std::string, SimulationType);
+        bool updated = false;
+        if(not(simulationtype == "implicit")){
+            this->updatePressure_(/*timeIdx*/ 0);
+            this->updateFluxes_();
+            updated = true;
+        }
+        return updated;
+    }
+    void syncPressureForward(){
+        pressure_[1] = pressure_[0];
+    }
+    void syncPressureBackward(){
+        pressure_[0] = pressure_[1];
+    }
 
+    void syncTotalSaturationForward(){
+        totalSaturation_[1] = totalSaturation_[0];
+    }
+    void syncTotalSaturationBackward(){
+        totalSaturation_[0] = totalSaturation_[1];
+    }
+    
+    bool updateTotalSaturation(){
+        std::string simulationtype  = EWOMS_GET_PARAM(TypeTag, std::string, SimulationType);
+        // maybe use simulation type instead
+        bool updated = false;
+        if(not(simulationtype == "implicit")){
+            this->updateTotalSaturation_();
+            updated = true;
+        }
+        return updated;
+    }
 
 private:
     void checkDeckCompatibility_() const
@@ -2372,6 +2503,58 @@ private:
 
         return true;
     }
+    
+    bool updatePressure_(unsigned timeIdx)
+    {
+        ElementContext elemCtx(this->simulator());
+        const auto& vanguard = this->simulator().vanguard();
+        auto elemIt = vanguard.gridView().template begin</*codim=*/0>();
+        const auto& elemEndIt = vanguard.gridView().template end</*codim=*/0>();
+        for (; elemIt != elemEndIt; ++elemIt) {
+            const Element& elem = *elemIt;
+
+            elemCtx.updatePrimaryStencil(elem);
+            elemCtx.updatePrimaryIntensiveQuantities(timeIdx);
+
+            unsigned compressedDofIdx = elemCtx.globalSpaceIndex(/*spaceIdx=*/0, timeIdx);
+            const auto& iq = elemCtx.intensiveQuantities(/*spaceIdx=*/0, timeIdx);
+            const auto& fs = iq.fluidState();
+
+            if (FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx)) {
+                pressure_[timeIdx][compressedDofIdx][oilPhaseIdx] = Opm::getValue(fs.pressure(oilPhaseIdx));
+            }else if( FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)) {
+                pressure_[timeIdx][compressedDofIdx][gasPhaseIdx] = Opm::getValue(fs.pressure(gasPhaseIdx));
+            }else{
+                pressure_[timeIdx][compressedDofIdx][waterPhaseIdx] = Opm::getValue(fs.pressure(waterPhaseIdx));
+            }
+        }
+
+        return true;
+    }
+
+    bool updateTotalSaturation_()
+    {
+#ifndef NDEBUG                
+            Opm::LinearizationType linearizationType = this->simulator().model().linearizer().getLinearizationType();
+            assert(linearizationType.type == Opm::LinearizationType::seqtransport);
+#endif
+        ElementContext elemCtx(this->simulator());
+        const auto& vanguard = this->simulator().vanguard();
+        auto elemIt = vanguard.gridView().template begin</*codim=*/0>();
+        const auto& elemEndIt = vanguard.gridView().template end</*codim=*/0>();
+        for (; elemIt != elemEndIt; ++elemIt) {
+            const Element& elem = *elemIt;
+            elemCtx.updatePrimaryStencil(elem);
+            elemCtx.updatePrimaryIntensiveQuantities(/*timeIdx=*/0);
+            unsigned compressedDofIdx = elemCtx.globalSpaceIndex(/*spaceIdx=*/0, /*timeIdx=*/0);
+            const auto& iq = elemCtx.intensiveQuantities(/*spaceIdx=*/0, /*timeIdx=*/0);
+            const auto& fs = iq.fluidState();
+            // TODO: not sure where to handle the update totalSaturation_[1]
+            totalSaturation_[/*timeIdx=*/0][compressedDofIdx] = Opm::getValue(fs.totalSaturation());
+        }
+        return true;
+    }
+
 
     void readRockParameters_()
     {
@@ -2731,7 +2914,7 @@ private:
             int elemIdx = elemCtx.globalSpaceIndex(/*spaceIdx=*/0, /*timeIdx=*/0);
             initial(sol[elemIdx], elemCtx, /*spaceIdx=*/0, /*timeIdx=*/0);
         }
-
+        this->updateAllPressures();
         // make sure that the ghost and overlap entities exhibit the correct
         // solution. alternatively, this could be done in the loop above by also
         // considering non-interior elements. Since the initial() method might not work
@@ -3058,6 +3241,41 @@ private:
         pffDofData_.update(distFn);
     }
 
+
+
+    void updateFluxes_(){
+        const auto& vanguard = this->simulator().vanguard();
+        unsigned numElems = vanguard.gridView().size(/*codim=*/0);
+        totalFlux_.resize(numElems);
+        ElementContext elemCtx(this->simulator());
+        auto elemIt = vanguard.gridView().template begin</*codim=*/0>();
+        const auto& elemEndIt = vanguard.gridView().template end</*codim=*/0>();
+        for (; elemIt != elemEndIt; ++elemIt) {
+            const Element& elem = *elemIt;
+
+            //elemCtx.updatePrimaryStencil(elem);
+            //elemCtx.updatePrimaryIntensiveQuantities(/*timeIdx=*/0);
+            elemCtx.updateStencil(elem);
+            elemCtx.updateAllIntensiveQuantities();
+            elemCtx.updateAllExtensiveQuantities();
+            unsigned compressedDofIdx = elemCtx.globalSpaceIndex(/*spaceIdx=*/0, /*timeIdx=*/0);
+            //const auto& stencil = elemCtx.stencil(timeIdx);
+            size_t numInteriorFaces = elemCtx.numInteriorFaces(/*timeIdx*/ 0);
+            totalFlux_[compressedDofIdx].resize(numInteriorFaces);
+            for (unsigned scvfIdx = 0; scvfIdx < numInteriorFaces; scvfIdx++) {
+                /*
+                  const auto& face = stencil.interiorFace(scvfIdx);
+                  unsigned i = face.interiorIndex();
+                  unsigned j = face.exteriorIndex();
+                */
+                const auto& extQuants = elemCtx.extensiveQuantities(scvfIdx, /*timeIdx*/ 0);
+                // this is what I want
+                const auto& totalflux = extQuants.totalFlux();
+                totalFlux_[compressedDofIdx][scvfIdx] = Toolbox::value(totalflux);
+            }
+        }
+    }
+
     void readBoundaryConditions_()
     {
         nonTrivialBoundaryConditions_ = false;
@@ -3279,6 +3497,9 @@ private:
     std::vector<Scalar> maxWaterSaturation_;
     std::vector<Scalar> overburdenPressure_;
     std::vector<Scalar> minOilPressure_;
+    std::array< std::vector<Dune::FieldVector<Scalar,3> >, 2> pressure_;
+    std::array<std::vector<Scalar>, 2>  totalSaturation_;
+    std::vector< std::vector<Scalar> > totalFlux_;
 
     std::vector<TabulatedTwoDFunction> rockCompPoroMult_;
     std::vector<TabulatedTwoDFunction> rockCompTransMult_;

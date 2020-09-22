@@ -22,7 +22,8 @@
 
 #include <opm/models/utils/propertysystem.hh>
 #include <opm/models/utils/parametersystem.hh>
-
+#include <opm/models/discretization/common/fvbaseproperties.hh>
+#include <ebos/eclbasevanguard.hh>
 #include <string>
 
 namespace Opm::Properties {
@@ -103,6 +104,15 @@ template<class TypeTag, class MyTypeTag>
 struct EnableWellOperabilityCheck {
     using type = UndefinedProperty;
 };
+
+// for sequential
+NEW_PROP_TAG(MaxStrictIterSeq);
+NEW_PROP_TAG(ToleranceCnvSeq);
+NEW_PROP_TAG(ToleranceCnvRelaxedSeq);
+NEW_PROP_TAG(TolerancePressure);
+NEW_PROP_TAG(ReusePressureSolver);
+NEW_PROP_TAG(SimulationType);
+NEW_PROP_TAG(PressureSolverJson);
 
 // parameters for multisegment wells
 template<class TypeTag, class MyTypeTag>
@@ -274,6 +284,15 @@ struct RelaxedPressureTolInnerIterMsw<TypeTag, TTag::FlowModelParameters> {
     static constexpr type value = 0.5e5;
 };
 
+// for sequential
+SET_INT_PROP(FlowModelParameters, MaxStrictIterSeq, 8);
+SET_SCALAR_PROP(FlowModelParameters, ToleranceCnvSeq,1e-2);
+SET_SCALAR_PROP(FlowModelParameters, ToleranceCnvRelaxedSeq, 1e9);
+SET_SCALAR_PROP(FlowModelParameters, TolerancePressure, 1e-4);
+SET_INT_PROP(FlowModelParameters, ReusePressureSolver, 0);
+SET_STRING_PROP(FlowModelParameters, SimulationType, "implicit");
+SET_STRING_PROP(FlowModelParameters, PressureSolverJson, "pressuresolver.json");
+
 // if openMP is available, determine the number threads per process automatically.
 #if _OPENMP
 template<class TypeTag>
@@ -375,7 +394,21 @@ namespace Opm
         // Whether to add influences of wells between cells to the matrix and preconditioner matrix
         bool matrix_add_well_contributions_;
 
+        // for sequential
+        /// Maximum number of Newton iterations before we give up on the CNV convergence criterion
+        int max_strict_iter_seq_;
+        /// Local convergence tolerance (max of local saturation errors).
+        double tolerance_cnv_seq_;
+        /// Relaxed local convergence tolerance (used when iter >= max_strict_iter_).
+        double tolerance_cnv_relaxed_seq_;
+        /// pressure tolerance
+        double tolerance_pressure_;
+        /// policy for reuse of pressure solver
+        int  reuse_pressure_solver_;
+        // name of json file for pressure setup
+        std::string pressure_solver_json_;
         /// Construct from user parameters or defaults.
+
         BlackoilModelParametersEbos()
         {
             dbhp_max_rel_=  EWOMS_GET_PARAM(TypeTag, Scalar, DbhpMaxRel);
@@ -407,6 +440,16 @@ namespace Opm
             matrix_add_well_contributions_ = EWOMS_GET_PARAM(TypeTag, bool, MatrixAddWellContributions);
 
             deck_file_name_ = EWOMS_GET_PARAM(TypeTag, std::string, EclDeckFileName);
+
+            // for sequential
+            max_strict_iter_seq_ = EWOMS_GET_PARAM(TypeTag, int, MaxStrictIterSeq);
+            tolerance_cnv_seq_ = EWOMS_GET_PARAM(TypeTag, Scalar, ToleranceCnvSeq);
+            tolerance_cnv_relaxed_seq_ = EWOMS_GET_PARAM(TypeTag, Scalar, ToleranceCnvRelaxedSeq);
+            tolerance_pressure_ = EWOMS_GET_PARAM(TypeTag, Scalar, TolerancePressure);
+            reuse_pressure_solver_ = EWOMS_GET_PARAM(TypeTag, int, ReusePressureSolver);
+            pressure_solver_json_  = EWOMS_GET_PARAM(TypeTag, std::string,PressureSolverJson);
+
+
         }
 
         static void registerParameters()
@@ -440,6 +483,17 @@ namespace Opm
             EWOMS_REGISTER_PARAM(TypeTag, bool, UseUpdateStabilization, "Try to detect and correct oscillations or stagnation during the Newton method");
             EWOMS_REGISTER_PARAM(TypeTag, bool, MatrixAddWellContributions, "Explicitly specify the influences of wells between cells in the Jacobian and preconditioner matrices");
             EWOMS_REGISTER_PARAM(TypeTag, bool, EnableWellOperabilityCheck, "Enable the well operability checking");
+
+
+            // for sequential
+            EWOMS_REGISTER_PARAM(TypeTag, int, MaxStrictIterSeq, "Maximum number of sequential iterations before relaxed tolerances are used for the CNV convergence criterion");
+            EWOMS_REGISTER_PARAM(TypeTag, Scalar, ToleranceCnvSeq, "Local convergence tolerance for sequentialtransport(Maximum of local saturation errors)");
+            EWOMS_REGISTER_PARAM(TypeTag, Scalar, ToleranceCnvRelaxedSeq, "Relaxed local convergence tolerance that applies for iterations after the iterations with the strict tolerance for sequential transport");
+            EWOMS_REGISTER_PARAM(TypeTag, Scalar, TolerancePressure, "Relaxed local convergence tolerance that applies for iterations after the iterations with the strict tolerance for sequential transport");
+            EWOMS_REGISTER_PARAM(TypeTag, int, ReusePressureSolver, "Reuse policy for pressure");
+            EWOMS_REGISTER_PARAM(TypeTag, std::string, PressureSolverJson, "Json setupfile for pressure solver");
+            EWOMS_REGISTER_PARAM(TypeTag, std::string, SimulationType, "Define simulation type: implicit, seq, fimseq, pressure");
+
         }
     };
 } // namespace Opm

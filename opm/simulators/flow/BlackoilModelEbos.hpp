@@ -35,6 +35,7 @@
 #include <opm/simulators/aquifers/BlackoilAquiferModel.hpp>
 #include <opm/simulators/wells/WellConnectionAuxiliaryModule.hpp>
 #include <opm/simulators/flow/countGlobalCells.hpp>
+#include <opm/simulators/flow/PressureMatrixHelper.hpp>
 
 #include <opm/grid/UnstructuredGrid.h>
 #include <opm/simulators/timestepping/SimulatorReport.hpp>
@@ -184,6 +185,10 @@ namespace Opm {
         typedef Dune::BlockVector<VectorBlockType>      BVector;
 
         typedef ISTLSolverEbos<TypeTag> ISTLSolverType;
+
+        typedef  Dune::BCRSMatrix< Dune::FieldMatrix<double,1,1>> PressureMatrixType;
+        typedef  Dune::BlockVector<Dune::FieldVector<double,1>> PressureVectorType;
+        typedef  Dune::FlexibleSolver<PressureMatrixType, PressureVectorType> PressureSolverType;
         //typedef typename SolutionVector :: value_type            PrimaryVariables ;
 
         // ---------  Public methods  ---------
@@ -232,13 +237,19 @@ namespace Opm {
 
         /// Called once before each time step.
         /// \param[in] timer                  simulation timer
-        void prepareStep(const SimulatorTimerInterface& timer)
+        void prepareStep(const SimulatorTimerInterface& timer, bool next = true)
         {
             // update the solution variables in ebos
-            if ( timer.lastStepFailed() ) {
-                ebosSimulator_.model().updateFailed();
-            } else {
-                ebosSimulator_.model().advanceTimeLevel();
+            if(next){
+                if ( timer.lastStepFailed() ) {
+                    ebosSimulator_.model().updateFailed();
+                    this->updateSolution();
+                } else {
+                    ebosSimulator_.model().advanceTimeLevel();
+                }
+            }else{
+                return;
+                //ebosSimulator_.model().advanceTimeLevel();
             }
 
             // set the timestep size and episode index for ebos explicitly. ebos needs to
@@ -512,32 +523,178 @@ namespace Opm {
             return ebosSimulator_.model().newtonMethod().linearSolver().iterations ();
         }
 
+        std::unique_ptr<
+            Dune::FlexibleSolver< Dune::BCRSMatrix< Dune::FieldMatrix<double,1,1>>,
+                                  Dune::BlockVector<Dune::FieldVector<double,1>>
+                                  >            
+            >
+        makePressureSolver(Dune::BCRSMatrix< Dune::FieldMatrix<double,1,1>>& pmatrix) {
+            boost::property_tree::ptree prm;
+                if (std::filesystem::exists(param_.pressure_solver_json_) ) {
+                    try{
+                        boost::property_tree::read_json(param_.pressure_solver_json_, prm);
+                    }catch(...){
+                        OPM_THROW(std::logic_error,"failed in passing configuration file:" + param_.pressure_solver_json_);
+                    }
+                } else {
+                    // using a default setup for pressure solver
+                    std::stringstream ss;
+                    prm.put("solver","umfpack");
+                    prm.put("blocksize",1);
+                    prm.put("verbosity",1);
+                    /*
+                    ss << "{\n"
+                          " \"solver\": \"umfpack\",\n"
+                          " \"blocksize\": \"1\"\n"
+                          "}";
+                    boost::property_tree::read_json(ss, prm);
+                    */
+                }
+                std::any parallelInformation;
+                extractParallelGridInformationToISTL(ebosSimulator_.vanguard().grid(), parallelInformation);
+                using AbstractOperatorType = Dune::AssembledLinearOperator<PressureMatrixType, PressureVectorType, PressureVectorType>;
+                std::unique_ptr<AbstractOperatorType> operator_for_flexiblesolver;
+                std::function<PressureVectorType()> weightsCalculator;// dummy
+                std::unique_ptr<PressureSolverType> pressureSolver;
+#if HAVE_MPI
+                using Communication = Dune::OwnerOverlapCopyCommunication<int, int>;
+#else
+                using Communication = int; // Dummy type
+#endif
+                std::unique_ptr<Communication> comm;
+
+#if HAVE_MPI
+                if (ebosSimulator_.gridView().comm().size() > 1) {
+                    // Parallel case.
+                    assert(parallelInformation.type() == typeid(ParallelISTLInformation));
+                    // Parallel case.
+                    const ParallelISTLInformation* parinfo = std::any_cast<ParallelISTLInformation>(&parallelInformation);
+                    assert(parinfo);
+                    comm = std::make_unique<Communication>(parinfo->communicator());
+                    using ParOperatorType = Dune::OverlappingSchwarzOperator<PressureMatrixType, PressureVectorType,
+                                                                             PressureVectorType, Communication>;
+                    operator_for_flexiblesolver = std::make_unique<ParOperatorType>(pmatrix, *comm);
+                    pressureSolver = std::make_unique<PressureSolverType>(*operator_for_flexiblesolver, *comm , prm, weightsCalculator);
+                } else
+#endif
+                {
+                    // Serial case.
+                    using SeqLinearOperator = Dune::MatrixAdapter<PressureMatrixType, PressureVectorType, PressureVectorType>;
+                    operator_for_flexiblesolver = std::make_unique<SeqLinearOperator>(pmatrix);
+                    pressureSolver = std::make_unique<PressureSolverType>(*operator_for_flexiblesolver, prm, weightsCalculator);
+                }
+                return pressureSolver;
+
+        }
+        bool shouldCreatePressureSolver(){
+            if(!pressureSolver_){
+                return true;
+            }
+            if(param_.reuse_pressure_solver_ > 0){
+                return false;
+            }else{
+                return true;
+            }
+            assert(false);
+            
+        }
         /// Solve the Jacobian system Jx = r where J is the Jacobian and
         /// r is the residual.
         void solveJacobianSystem(BVector& x)
         {
+            if(ebosSimulator_.model().linearizer().getLinearizationType().type == Opm::LinearizationType::pressure){
+                auto& ebosJac = ebosSimulator_.model().linearizer().jacobian();
+                auto& ebosResid = ebosSimulator_.model().linearizer().residual();
+                // NB when tested the linear solver an the martrix could be part of linearizer
+                
+                int pressureVarIndex=1;
+                // true impes case could add case with trivial weighs i equations is modifind with weights
+                // this would make a newton based method if derivative of the weights are takein into account
+                BVector weights = this->getPressureWeights(pressureVarIndex);
+                if(!pmatrix_){
+                    // make matrix structure and fill with elements
+                    pmatrix_ =
+                        std::make_unique<PressureMatrixType>(PressureHelper::makePressureMatrix<Mat,
+                                                            BVector,
+                                                            PressureMatrixType,
+                                                            PressureVectorType>(
+                                                            ebosJac.istlMatrix(),
+                                                            pressureVarIndex,
+                                                            weights));
+                }else{
+                    //only update elements of matrix
+                    // assume matrix structure never change
+                    PressureHelper::makePressureMatrixEntries<Mat,
+                                                              PressureMatrixType,
+                                                              BVector>(
+                                                                 *pmatrix_,
+                                                                 ebosJac.istlMatrix(),
+                                                                 pressureVarIndex,
+                                                                 weights);
+                }
+                PressureVectorType rhs(ebosResid.size(),0);
+                PressureHelper::moveToPressureEqn(ebosResid, rhs, weights);
+                if(this->shouldCreatePressureSolver()){
+                    pressureSolver_ = makePressureSolver(*pmatrix_);
+                }else{
+                    pressureSolver_->preconditioner().update();
+                }
+                
+                PressureVectorType xp(x.size(),0);
+                Dune::InverseOperatorResult res;
+                pressureSolver_->apply(xp,rhs, res);
+                /*
+                bool write_pressure_system  = false;               
+                if(write_pressure_system){
+                    Opm::Helper::writeSystem(this->ebosSimulator_, //simulator is only used to get names
+                                             pmatrix,
+                                             rhs,
+                                             comm.get(),
+                                             std::string("pressure_")
+                        );
+                }
+                */
+                x=0;
+                PressureHelper::movePressureToBlock(x, xp, pressureVarIndex);
+                // set initial guess
+            }else{
+                auto&  ebosJac = ebosSimulator_.model().linearizer().jacobian();
+                auto& ebosResid = ebosSimulator_.model().linearizer().residual();
 
-            auto& ebosJac = ebosSimulator_.model().linearizer().jacobian();
-            auto& ebosResid = ebosSimulator_.model().linearizer().residual();
+                // set initial guess
+                x = 0.0;
 
-            // set initial guess
-            x = 0.0;
-
-            auto& ebosSolver = ebosSimulator_.model().newtonMethod().linearSolver();
-            Dune::Timer perfTimer;
-            perfTimer.start();
-            ebosSolver.prepare(ebosJac, ebosResid);
-            linear_solve_setup_time_ = perfTimer.stop();
-            ebosSolver.setResidual(ebosResid);
-            // actually, the error needs to be calculated after setResidual in order to
-            // account for parallelization properly. since the residual of ECFV
-            // discretizations does not need to be synchronized across processes to be
-            // consistent, this is not relevant for OPM-flow...
-            ebosSolver.setMatrix(ebosJac);
-            ebosSolver.solve(x);
+                auto& ebosSolver = ebosSimulator_.model().newtonMethod().linearSolver();
+                Dune::Timer perfTimer;
+                perfTimer.start();
+                ebosSolver.prepare(ebosJac, ebosResid);
+                linear_solve_setup_time_ = perfTimer.stop();
+                ebosSolver.setResidual(ebosResid);
+                // actually, the error needs to be calculated after setResidual in order to
+                // account for parallelization properly. since the residual of ECFV
+                // discretizations does not need to be synchronized across processes to be
+                // consistent, this is not relevant for OPM-flow...
+                ebosSolver.setMatrix(ebosJac);
+                ebosSolver.solve(x);
+            }
        }
 
-
+        void updateSolution(){
+            unsigned numDof = ebosSimulator_.model().numGridDof();
+            BVector dx(numDof,0);
+            this->updateSolution(dx);
+            //this->updateSolution(dx, 1);// can not be done
+            // for(unsigned timeidx; timeidx< 2; ++timidx){
+            //     SolutionVector& sol = model().solution(/*historyIdx=*/timeidx);
+            //     size_t numGridDof = ebosSimulator_.model().numGridDof();
+            //     for (unsigned dofIdx = 0; dofIdx < numGridDof; ++dofIdx) {
+            //         sol[dofIdx].adaptPrimaryVariable(ebosSimulator_.problem(),dofIdx);
+            //     }
+            //     ebosSimulator_.model().invalidateIntensiveQuantitiesCache(/*timeIdx=*/0);
+            // }
+        
+        
+         }
 
         /// Apply an update to the primary variables.
         void updateSolution(const BVector& dx)
@@ -759,6 +916,8 @@ namespace Opm {
         {
             typedef std::vector< Scalar > Vector;
 
+            const double tol_mb  = param_.tolerance_mb_;
+
             const int numComp = numEq;
             Vector R_sum(numComp, 0.0 );
             Vector maxCoeff(numComp, std::numeric_limits< Scalar >::lowest() );
@@ -771,13 +930,20 @@ namespace Opm {
             auto cnvErrorPvFraction = computeCnvErrorPv(B_avg, dt);
             cnvErrorPvFraction /= pvSum;
 
-            const double tol_mb  = param_.tolerance_mb_;
             // Default value of relaxed_max_pv_fraction_ is 1 and
             // max_strict_iter_ is 8. Hence only iteration chooses
             // whether to use relaxed or not.
             // To activate only fraction use fraction below 1 and iter 0.
-            const bool use_relaxed = cnvErrorPvFraction < param_.relaxed_max_pv_fraction_ && iteration >= param_.max_strict_iter_;                                              
-            const double tol_cnv = use_relaxed ? param_.tolerance_cnv_relaxed_ :  param_.tolerance_cnv_;
+            const bool use_relaxed = cnvErrorPvFraction < param_.relaxed_max_pv_fraction_ && iteration >= param_.max_strict_iter_;
+
+            // const double tol_cnv = use_relaxed ? param_.tolerance_cnv_relaxed_ :  param_.tolerance_cnv_;
+            double tol_cnv;
+            if(ebosSimulator_.model().linearizer().getLinearizationType().type == Opm::LinearizationType::seqtransport){
+                // TODO: maybe this one also should change to use_relaxed
+                tol_cnv = (iteration < param_.max_strict_iter_seq_) ? param_.tolerance_cnv_seq_ : param_.tolerance_cnv_relaxed_seq_;
+            }else{
+                tol_cnv = use_relaxed ? param_.tolerance_cnv_ : param_.tolerance_cnv_relaxed_;
+            }
 
             // Finish computation
             std::vector<Scalar> CNV(numComp);
@@ -868,7 +1034,9 @@ namespace Opm {
                         msg += compNames[compIdx][0];
                         msg += ") ";
                     }
-                    OpmLog::debug(msg);
+                    // TODO: changing back to debug
+                    // OpmLog::debug(msg);
+                    OpmLog::info(msg);
                 }
                 std::ostringstream ss;
                 const std::streamsize oprec = ss.precision(3);
@@ -882,12 +1050,62 @@ namespace Opm {
                 }
                 ss.precision(oprec);
                 ss.flags(oflags);
-                OpmLog::debug(ss.str());
+                // TODO: changing back to debug
+                // OpmLog::debug(ss.str());
+                OpmLog::info(ss.str());
             }
 
             return report;
         }
 
+        BVector getPressureWeights(int pressureVarIndex){
+            size_t nocells = ebosSimulator_.model().linearizer().residual().size();
+            BVector weights(nocells);
+            ElementContext elemCtx(ebosSimulator_);
+            typedef typename GET_PROP_TYPE(TypeTag, ThreadManager) ThreadManager;
+            Opm::Amg::getTrueImpesWeights(pressureVarIndex,
+                                          weights,
+                                          ebosSimulator_.vanguard().gridView(),
+                                          elemCtx, ebosSimulator_.model(),
+                                          ThreadManager::threadId());
+            return weights;
+            
+        }
+
+        ConvergenceReport getPressureConvergence(const int iteration)
+        {
+            //should be globaly defined
+            int pressureVarIndex = 1;
+            BVector weights = this->getPressureWeights(pressureVarIndex);
+            const auto& ebosResid = ebosSimulator_.model().linearizer().residual();
+            double norm=0.0;
+            for(size_t i = 0; i< weights.size(); i++){
+                auto& wb = weights[i];
+                auto& resb= ebosResid[i];
+                double lnorm=0.0;
+                for(size_t j = 0; j< wb.size(); j++){
+                    lnorm += wb[j]*resb[j];
+                }
+                norm = std::max(lnorm,norm);
+            }
+            std::ostringstream ss;
+            ss << "Iteration " << iteration << " Norm of pressure equation " << norm;
+            OpmLog::info(ss.str());
+            // NB need better convergence criteria
+            const double tol_pressure = param_.tolerance_pressure_;
+            bool converged = norm < tol_pressure;
+            ConvergenceReport report;
+            
+            if(not(converged)){
+                ConvergenceReport::ReservoirFailure   rv(
+                    ConvergenceReport::ReservoirFailure::Type::Pressure,
+                    ConvergenceReport::Severity::Normal, -1);
+                report.setReservoirFailed(rv); 
+            }
+            //report.converged = converged;
+            return report;
+        }
+        
         /// Compute convergence based on total mass balance (tol_mb) and maximum
         /// residual mass balance (tol_cnv).
         /// \param[in]   timer       simulation timer
@@ -900,6 +1118,12 @@ namespace Opm {
             // Get convergence reports for reservoir and wells.
             std::vector<Scalar> B_avg(numEq, 0.0);
             auto report = getReservoirConvergence(timer.currentStepLength(), iteration, B_avg, residual_norms);
+
+            // overwrite the convergence report if it is a pressure solve
+            if(ebosSimulator_.model().linearizer().getLinearizationType().type == Opm::LinearizationType::pressure){
+                report = getPressureConvergence(iteration);
+            }
+
             report += wellModel().getWellConvergence(B_avg);
 
             return report;
@@ -1008,6 +1232,9 @@ namespace Opm {
         double drMaxRel() const { return param_.dr_max_rel_; }
         double maxResidualAllowed() const { return param_.max_residual_allowed_; }
         double linear_solve_setup_time_;
+        std::unique_ptr<PressureSolverType> pressureSolver_;
+        std::unique_ptr<PressureMatrixType> pmatrix_;
+        
     public:
         std::vector<bool> wasSwitched_;
     };

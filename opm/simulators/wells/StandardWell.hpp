@@ -34,7 +34,7 @@
 #include <opm/models/blackoil/blackoilsolventmodules.hh>
 #include <opm/models/blackoil/blackoilfoammodules.hh>
 #include <opm/models/blackoil/blackoilbrinemodules.hh>
-
+#include <opm/models/discretization/common/linearizationtype.hh>
 #include <opm/material/densead/DynamicEvaluation.hpp>
 #include <opm/parser/eclipse/EclipseState/Schedule/ScheduleTypes.hpp>
 
@@ -180,6 +180,7 @@ namespace Opm
         virtual ConvergenceReport getWellConvergence(const WellState& well_state,
                                                      const std::vector<double>& B_avg,
                                                      Opm::DeferredLogger& deferred_logger,
+                                                     std::vector<double>& residual,
                                                      const bool relax_tolerance = false) const override;
 
         /// Ax = Ax - C D^-1 B x
@@ -369,16 +370,45 @@ namespace Opm
         void computeWellConnectionPressures(const Simulator& ebosSimulator,
                                                     const WellState& well_state);
 
+        // a struct to store all the relevant rates associated with perforations
+        struct PerfRates {
+            // surface perforation rates
+            std::vector<EvalWell> cq_s;
+            // reservor perfration total rates
+            EvalWell cq_r_t;
+
+            double perf_dis_gas_rate;
+
+            double perf_vap_oil_rate;
+
+            PerfRates(int num_components, int num_welleq)
+            : cq_s(num_components, {num_welleq + numEq, 0.})
+            , cq_r_t(num_welleq + numEq, 0.)
+            , perf_dis_gas_rate(0.)
+            , perf_vap_oil_rate(0.)
+            {
+            }
+        };
+        
+        void computePerfRateSeq(const IntensiveQuantities& intQuants,
+                                const std::vector<EvalWell>& mob,
+                                //const EvalWell& bhp,
+                                //const double Tw,
+                                //const int perf,
+                                const bool allow_cf,
+                                PerfRates& perf_rates,
+                                Opm::DeferredLogger& deferred_logger) const;
+        
         void computePerfRate(const IntensiveQuantities& intQuants,
                              const std::vector<EvalWell>& mob,
                              const EvalWell& bhp,
+                             const WellState& well_state,
                              const double Tw,
                              const int perf,
                              const bool allow_cf,
-                             std::vector<EvalWell>& cq_s,
-                             double& perf_dis_gas_rate,
-                             double& perf_vap_oil_rate,
-                             Opm::DeferredLogger& deferred_logger) const;
+                             PerfRates& perf_rates,
+                             Opm::DeferredLogger& deferred_logger,
+                             const Opm::LinearizationType& linearizatonType) const;
 
         void computeWellRatesWithBhp(const Simulator& ebosSimulator,
                                              const double& bhp,
@@ -544,6 +574,9 @@ namespace Opm
         std::optional<double> computeBhpAtThpLimitInj(const Simulator& ebos_simulator,
                                                       const SummaryState& summary_state,
                                                       DeferredLogger& deferred_logger) const;
+
+        // assembling the control equation for sequential transport solution
+        void assembleControlEqSeqTrans(const WellState& well_state);
 
     };
 

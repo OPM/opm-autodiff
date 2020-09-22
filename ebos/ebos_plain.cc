@@ -35,7 +35,7 @@ namespace Opm::Properties {
 
 namespace TTag {
 struct EbosPlainTypeTag {
-    using InheritsFrom = std::tuple<EclBaseProblem, BlackOilModel>;
+    using InheritsFrom = std::tuple<EclBaseProblem, BlackOilModel, FlowModelParameters>;
 };
 }
 

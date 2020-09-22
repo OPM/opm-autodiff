@@ -28,90 +28,98 @@
  * This approach to fluxes is very specific to two-point flux approximation and applies
  * what the Eclipse Technical Description calls the "NEWTRAN" transmissibility approach.
  */
-#ifndef EWOMS_ECL_FLUX_MODULE_HH
-#define EWOMS_ECL_FLUX_MODULE_HH
-
+#ifndef EWOMS_ECL_FLUX_MODULE_SEQ_HH
+#define EWOMS_ECL_FLUX_MODULE_SEQ_HH
+#include "eclfluxmodule.hh"
+/*
 #include <opm/models/discretization/common/fvbaseproperties.hh>
 #include <opm/models/blackoil/blackoilproperties.hh>
 #include <opm/models/utils/signum.hh>
 
 #include <opm/material/common/Valgrind.hpp>
+#include <opm/material/common/Exceptions.hpp>
 
 #include <dune/common/fvector.hh>
 #include <dune/common/fmatrix.hh>
-
+*/
+#include "totalfluxupwind.hh"
 namespace Opm {
 
-template <class TypeTag>
-class EclTransIntensiveQuantities;
+   
+// template <class TypeTag>
+// class EclTransIntensiveQuantities;
 
-template <class TypeTag>
-class EclTransExtensiveQuantities;
+// template <class TypeTag>
+// class EclTransExtensiveQuantities;
 
-template <class TypeTag>
-class EclTransBaseProblem;
-
+// template <class TypeTag>
+// class EclTransBaseProblem;
+    
 /*!
  * \ingroup EclBlackOilSimulator
  * \brief Specifies a flux module which uses ECL transmissibilities.
  */
-template <class TypeTag>
-struct EclTransFluxModule
-{
-    typedef EclTransIntensiveQuantities<TypeTag> FluxIntensiveQuantities;
-    typedef EclTransExtensiveQuantities<TypeTag> FluxExtensiveQuantities;
-    typedef EclTransBaseProblem<TypeTag> FluxBaseProblem;
 
-    /*!
-     * \brief Register all run-time parameters for the flux module.
-     */
-    static void registerParameters()
-    { }
-};
+// template <class TypeTag>
+// struct EclTransFluxModule
+// {
+//     typedef EclTransIntensiveQuantities<TypeTag> FluxIntensiveQuantities;
+//     typedef EclTransExtensiveQuantities<TypeTag> FluxExtensiveQuantities;
+//     typedef EclTransBaseProblem<TypeTag> FluxBaseProblem;
+
+//     /*!
+//      * \brief Register all run-time parameters for the flux module.
+//      */
+//     static void registerParameters()
+//     { }
+// };
 
 /*!
  * \ingroup EclBlackOilSimulator
  * \brief Provides the defaults for the parameters required by the
  *        transmissibility based volume flux calculation.
  */
+/*    
 template <class TypeTag>
 class EclTransBaseProblem
 { };
-
+*/
 /*!
  * \ingroup EclBlackOilSimulator
  * \brief Provides the intensive quantities for the ECL flux module
  */
-template <class TypeTag>
-class EclTransIntensiveQuantities
-{
-    using ElementContext = GetPropType<TypeTag, Properties::ElementContext>;
-protected:
-    void update_(const ElementContext& elemCtx OPM_UNUSED, unsigned dofIdx OPM_UNUSED, unsigned timeIdx OPM_UNUSED)
-    { }
-};
+
+// template <class TypeTag>
+// class EclTransIntensiveQuantities
+// {
+//     typedef typename GET_PROP_TYPE(TypeTag, ElementContext) ElementContext;
+// protected:
+//     void update_(const ElementContext& elemCtx OPM_UNUSED, unsigned dofIdx OPM_UNUSED, unsigned timeIdx OPM_UNUSED)
+//     { }
+// };
 
 /*!
  * \ingroup EclBlackOilSimulator
  * \brief Provides the ECL flux module
  */
-template <class TypeTag>
-class EclTransExtensiveQuantities
-{
-    using Implementation = GetPropType<TypeTag, Properties::ExtensiveQuantities>;
 
-    using FluidSystem = GetPropType<TypeTag, Properties::FluidSystem>;
-    using ElementContext = GetPropType<TypeTag, Properties::ElementContext>;
-    using Scalar = GetPropType<TypeTag, Properties::Scalar>;
-    using Evaluation = GetPropType<TypeTag, Properties::Evaluation>;
-    using GridView = GetPropType<TypeTag, Properties::GridView>;
-    using MaterialLaw = GetPropType<TypeTag, Properties::MaterialLaw>;
+template <class TypeTag>
+class EclTransExtensiveQuantitiesSeq
+{
+    typedef typename GET_PROP_TYPE(TypeTag, ExtensiveQuantities) Implementation;
+
+    typedef typename GET_PROP_TYPE(TypeTag, FluidSystem) FluidSystem;
+    typedef typename GET_PROP_TYPE(TypeTag, ElementContext) ElementContext;
+    typedef typename GET_PROP_TYPE(TypeTag, Scalar) Scalar;
+    typedef typename GET_PROP_TYPE(TypeTag, Evaluation) Evaluation;
+    typedef typename GET_PROP_TYPE(TypeTag, GridView) GridView;
+    typedef typename GET_PROP_TYPE(TypeTag, MaterialLaw) MaterialLaw;
 
     enum { dimWorld = GridView::dimensionworld };
     enum { gasPhaseIdx = FluidSystem::gasPhaseIdx };
     enum { numPhases = FluidSystem::numPhases };
-    enum { enableSolvent = getPropValue<TypeTag, Properties::EnableSolvent>() };
-    enum { enableEnergy = getPropValue<TypeTag, Properties::EnableEnergy>() };
+    enum { enableSolvent = GET_PROP_VALUE(TypeTag, EnableSolvent) };
+    enum { enableEnergy = GET_PROP_VALUE(TypeTag, EnableEnergy) };
 
     typedef Opm::MathToolbox<Evaluation> Toolbox;
     typedef Dune::FieldVector<Scalar, dimWorld> DimVector;
@@ -168,11 +176,15 @@ public:
      * \param phaseIdx The index of the fluid phase
      */
     const Evaluation& volumeFlux(unsigned phaseIdx) const
-    { return volumeFlux_[phaseIdx]; }
-
-    const Evaluation& totalFlux() const{
-        throw std::invalid_argument("The ECL transmissibility module does not provide totalflux: see totalfluxupwind.hh");
+    { 
+        return volumeFlux_[phaseIdx];
     }
+
+    const Evaluation& totalFlux() const
+    { 
+        return totalFlux_;
+    }
+
     
 protected:
     /*!
@@ -250,7 +262,7 @@ protected:
         // the distances from the DOF's depths. (i.e., the additional depth of the
         // exterior DOF)
         Scalar distZ = zIn - zEx;
-
+        totalFlux_ = 0.0;
         for (unsigned phaseIdx=0; phaseIdx < numPhases; phaseIdx++) {
             if (!FluidSystem::phaseIsActive(phaseIdx))
                 continue;
@@ -352,8 +364,173 @@ protected:
             else
                 volumeFlux_[phaseIdx] =
                     pressureDifference_[phaseIdx]*(Toolbox::value(up.mobility(phaseIdx))*Toolbox::value(transMult)*(-trans/faceArea));
+
+            totalFlux_ += volumeFlux_[phaseIdx];
         }
+        // use the sequential type even in fully implicit
+        calculateGradientsSeq_(elemCtx, scvfIdx, timeIdx);
     }
+
+    /*!
+     * \brief Update the required gradients for interior faces
+     */
+    void calculateGradientsSeq_(const ElementContext& elemCtx, unsigned scvfIdx, unsigned timeIdx)
+    {
+        //NB a bit hacky
+        LinearizationType linearizationType = elemCtx.simulator().model().linearizer().getLinearizationType(); 
+        Opm::Valgrind::SetUndefined(*this);
+        
+        const auto& problem = elemCtx.problem();
+        const auto& stencil = elemCtx.stencil(timeIdx);
+        const auto& scvf = stencil.interiorFace(scvfIdx);
+
+        interiorDofIdx_ = scvf.interiorIndex();
+        exteriorDofIdx_ = scvf.exteriorIndex();
+        assert(interiorDofIdx_ != exteriorDofIdx_);
+
+        //unsigned I = stencil.globalSpaceIndex(interiorDofIdx_);
+        //unsigned J = stencil.globalSpaceIndex(exteriorDofIdx_);
+
+        Evaluation trans = problem.transmissibility(elemCtx, interiorDofIdx_, exteriorDofIdx_);
+        Scalar faceArea = scvf.area();//NB check definition of flux
+        trans /= faceArea; // all calculations here is done for pr area
+        // estimate the gravity correction: for performance reasons we use a simplified
+        // approach for this flux module that assumes that gravity is constant and always
+        // acts into the downwards direction. (i.e., no centrifuge experiments, sorry.)
+        Scalar g = elemCtx.problem().gravity()[dimWorld - 1];
+
+        const auto& intQuantsIn = elemCtx.intensiveQuantities(interiorDofIdx_, timeIdx);
+        const auto& intQuantsEx = elemCtx.intensiveQuantities(exteriorDofIdx_, timeIdx);
+
+        // {
+        //     // if used only for sequential scalar is ok
+        //     const Scalar& transMult1 =
+        //         problem.template
+        //         rockCompTransMultiplier<Scalar>(intQuantsIn, stencil.globalSpaceIndex(interiorDofIdx_));
+            
+        //     const Scalar& transMult2 =
+        //         problem.template
+        //         rockCompTransMultiplier<Scalar>(intQuantsIn, stencil.globalSpaceIndex(exteriorDofIdx_));
+        //     Scalar transM = 1.0/(1.0/transMult1 + 1.0/transMult2);
+        //     trans *= transM;
+        // }
+        
+        // this is quite hacky because the dune grid interface does not provide a
+        // cellCenterDepth() method (so we ask the problem to provide it). The "good"
+        // solution would be to take the Z coordinate of the element centroids, but since
+        // ECL seems to like to be inconsistent on that front, it needs to be done like
+        // here...
+        Scalar zIn = problem.dofCenterDepth(elemCtx, interiorDofIdx_, timeIdx);
+        Scalar zEx = problem.dofCenterDepth(elemCtx, exteriorDofIdx_, timeIdx);
+
+        // the distances from the DOF's depths. (i.e., the additional depth of the
+        // exterior DOF)
+        Scalar distZ = zIn - zEx;
+
+        Evaluation mob1[numPhases];
+        Evaluation mob2[numPhases];
+        Evaluation headDiff[numPhases];
+        for (unsigned phaseIdx=0; phaseIdx < numPhases; phaseIdx++) {
+            if (!FluidSystem::phaseIsActive(phaseIdx))
+                continue;
+
+            // check shortcut: if the mobility of the phase is zero in the interior as
+            // well as the exterior DOF, we can skip looking at the phase.
+            // if (intQuantsIn.mobility(phaseIdx) <= 0.0 &&
+            //     intQuantsEx.mobility(phaseIdx) <= 0.0)
+            // {
+            //     upIdx_[phaseIdx] = interiorDofIdx_;
+            //     dnIdx_[phaseIdx] = exteriorDofIdx_;
+            //     pressureDifference_[phaseIdx] = 0.0;
+            //     volumeFlux_[phaseIdx] = 0.0;
+            //     continue;
+            // }
+
+            // do the gravity correction: compute the hydrostatic pressure for the
+            // external at the depth of the internal one
+            const Evaluation& rhoIn = intQuantsIn.fluidState().density(phaseIdx);
+            Scalar rhoEx = Toolbox::value(intQuantsEx.fluidState().density(phaseIdx));
+            Evaluation rhoAvg = (rhoIn + rhoEx)/2;            
+            headDiff[phaseIdx] = -1.0*rhoAvg*(distZ*g);
+
+            // also add capillary part
+            const Evaluation& pcIn = intQuantsIn.fluidState().pc(phaseIdx);
+            Scalar pcEx = Toolbox::value(intQuantsEx.fluidState().pc(phaseIdx));
+            headDiff[phaseIdx] += (pcIn-pcEx);
+            
+            mob1[phaseIdx] = intQuantsIn.mobility(phaseIdx);
+            mob2[phaseIdx] = Toolbox::value(intQuantsEx.mobility(phaseIdx));
+        }
+        Evaluation totalSaturation1 = intQuantsIn.fluidState().totalSaturation();
+        Evaluation totalSaturation2 = Toolbox::value(intQuantsEx.fluidState().totalSaturation());
+        Evaluation totalflux;
+        if(linearizationType.type == Opm::LinearizationType::seqtransport){
+            unsigned gIdx = elemCtx.globalSpaceIndex(/*spaceIdx=*/0, /*timeIdx=*/0);
+            //const auto& problem = elemCtx.problem();
+            double flux = problem.totalFlux(gIdx,  scvfIdx); 
+            totalflux = flux;
+        }else{
+            totalflux = totalFlux_;
+        }
+        
+        std::array<int, numPhases> upwind;
+        connectionMultiPhaseUpwind(upwind,
+                                   headDiff,
+                                   mob1,
+                                   mob2,
+                                   trans,
+                                   totalflux);//NB! taken from the object it self..
+        
+        Evaluation fmob[numPhases];//upwind weighted total saturation
+        Evaluation fst[numPhases];// upwindweighted total saturation
+        Evaluation mobT = 0;
+        for (unsigned phaseIdx=0; phaseIdx < numPhases; phaseIdx++) {
+            if (!FluidSystem::phaseIsActive(phaseIdx))
+                continue;
+            if(upwind[phaseIdx] > 0){
+                if(linearizationType.type == Opm::LinearizationType::implicit){
+                    if(not(pressureDifference_[phaseIdx] == 0.0)){
+                        // check faild in non significant flow 
+                        assert(upIdx_[phaseIdx] == interiorDofIdx_);//NB test for implicit
+                    }
+                }
+                upIdx_[phaseIdx] = interiorDofIdx_;
+                dnIdx_[phaseIdx] = exteriorDofIdx_;
+                fmob[phaseIdx] = mob1[phaseIdx];
+                fst[phaseIdx] = totalSaturation1;
+            }else{
+             if(linearizationType.type == Opm::LinearizationType::implicit){
+                 if(not(pressureDifference_[phaseIdx] == 0.0)){
+                     // check faild in non significant flow 
+                     assert(upIdx_[phaseIdx] == exteriorDofIdx_);//NB test for implicit
+                 }
+             }
+                upIdx_[phaseIdx] = exteriorDofIdx_;
+                dnIdx_[phaseIdx] = interiorDofIdx_;
+                fmob[phaseIdx] = mob2[phaseIdx];
+                fst[phaseIdx] = totalSaturation2;
+            }
+            mobT += fmob[phaseIdx];
+        }
+          
+        for (unsigned phaseIdx=0; phaseIdx < numPhases; phaseIdx++) {
+            if (!FluidSystem::phaseIsActive(phaseIdx))
+                continue;
+            Evaluation mobG = 0;
+            for (unsigned phaseIdx1=0; phaseIdx1 < numPhases; phaseIdx1++) {
+                if( not(phaseIdx == phaseIdx1) ){
+                    mobG = mobG + fmob[phaseIdx1]*(headDiff[phaseIdx] - headDiff[phaseIdx1]);
+                }
+            }
+            Evaluation pFlux = fmob[phaseIdx]*(1.0/mobT) * (totalflux + trans * mobG);
+            if(linearizationType.type == Opm::LinearizationType::implicit){
+                // Does this test derivatives??
+                assert(Toolbox::isSame(pFlux,volumeFlux_[phaseIdx],1e-6)); // for testing code in fully implit mode
+            }    
+            volumeFlux_[phaseIdx] = fst[phaseIdx] * pFlux;
+        }          
+    }
+
 
     /*!
      * \brief Update the required gradients for boundary faces
@@ -484,6 +661,7 @@ private:
 
     // the volumetric flux of all phases [m^3/s]
     Evaluation volumeFlux_[numPhases];
+    Evaluation totalFlux_;
 
     // the difference in effective pressure between the exterior and the interior degree
     // of freedom [Pa]
