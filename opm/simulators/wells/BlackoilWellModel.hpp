@@ -297,13 +297,13 @@ namespace Opm {
             bool terminal_output_;
             bool has_solvent_;
             bool has_polymer_;
-            std::vector<int> pvt_region_idx_;
+            std::function<std::size_t (std::size_t)> pvt_region_idx_;
             PhaseUsage phase_usage_;
             size_t global_num_cells_;
             // the number of the cells in the local grid
             size_t local_num_cells_;
             double gravity_;
-            std::vector<double> depth_;
+            std::function<double (std::size_t)> depth_;
             bool initial_step_;
             bool report_step_starts_;
             bool glift_debug = false;
