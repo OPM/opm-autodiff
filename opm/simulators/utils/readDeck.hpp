@@ -56,7 +56,7 @@ FileOutputMode setupLogging(int mpi_rank_, const std::string& deck_filename, con
 void readDeck(int rank, std::string& deckFilename, std::unique_ptr<Opm::Deck>& deck, std::unique_ptr<Opm::EclipseState>& eclipseState,
               std::unique_ptr<Opm::Schedule>& schedule, std::unique_ptr<Opm::SummaryConfig>& summaryConfig,
               std::unique_ptr<ErrorGuard> errorGuard, std::shared_ptr<Opm::Python>& python, std::unique_ptr<ParseContext> parseContext,
-              bool initFromRestart, bool checkDeck);
+              bool initFromRestart, bool checkDeck, const std::string& restartCommandLine);
 } // end namespace Opm
 
 #endif // OPM_READDECK_HEADER_INCLUDED
