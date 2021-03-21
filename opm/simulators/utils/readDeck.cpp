@@ -192,7 +192,6 @@ void readDeck(int rank, std::string& deckFilename, std::unique_ptr<Opm::Deck>& d
             {
                 Opm::Parser parser;
                 deck = std::make_unique<Opm::Deck>( parser.parseFile(deckFilename , *parseContext, *errorGuard));
-                Opm::MissingFeatures::checkKeywords(*deck, *parseContext, *errorGuard);
                 if ( checkDeck )
                     Opm::checkDeck(*deck, parser, *parseContext, *errorGuard);
             }
@@ -231,6 +230,7 @@ void readDeck(int rank, std::string& deckFilename, std::unique_ptr<Opm::Deck>& d
                                                                      eclipseState->aquifer(), *parseContext, *errorGuard);
 
             Opm::checkConsistentArrayDimensions(*eclipseState, *schedule, *parseContext, *errorGuard);
+            Opm::MissingFeatures::checkKeywords(*deck, *parseContext, *errorGuard);
         }
         catch(const OpmInputError& input_error) {
             failureMessage = input_error.what();
