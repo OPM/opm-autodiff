@@ -60,6 +60,7 @@ bool EclGenericVanguard::externalDeckSet_ = false;
 std::unique_ptr<EclipseState> EclGenericVanguard::externalEclState_;
 std::unique_ptr<Schedule> EclGenericVanguard::externalEclSchedule_;
 std::unique_ptr<SummaryConfig> EclGenericVanguard::externalEclSummaryConfig_;
+EclGenericVanguard::CommunicationType EclGenericVanguard::comm_;
 
 EclGenericVanguard::EclGenericVanguard()
     : python(std::make_shared<Python>())
