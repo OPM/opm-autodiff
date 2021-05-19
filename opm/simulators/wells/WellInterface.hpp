@@ -446,6 +446,8 @@ namespace Opm
 
         std::vector< Scalar > B_avg_;
 
+        std::vector< std::string> well_control_log_;
+
         // the vectors used to describe the inflow performance relationship (IPR)
         // Q = IPR_A - BHP * IPR_B
         // TODO: it minght need to go to WellInterface, let us implement it in StandardWell first
