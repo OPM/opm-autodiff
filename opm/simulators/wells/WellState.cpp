@@ -237,6 +237,7 @@ void WellState::init(const std::vector<double>& cellPressures,
                                           const SummaryState& summary_state)
 {
     // call init on base class
+    this->debug_config = schedule[report_step].debug_config();
     this->base_init(cellPressures, wells_ecl, parallel_well_info, well_perf_data, summary_state);
     this->global_well_info = std::make_optional<GlobalWellInfo>( schedule, report_step, wells_ecl );
     for (const auto& wname : schedule.wellNames(report_step))

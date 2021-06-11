@@ -403,7 +403,7 @@ private:
     // Well potentials
     WellContainer<std::vector<double>> well_potentials_;
 
-
+    DebugConfig debug_config;
     data::Segment
     reportSegmentResults(const PhaseUsage& pu,
                          const int         well_id,
