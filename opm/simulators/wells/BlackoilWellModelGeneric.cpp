@@ -19,6 +19,8 @@
   You should have received a copy of the GNU General Public License
   along with OPM.  If not, see <http://www.gnu.org/licenses/>.
 */
+#include <fstream>
+#include <iostream>
 
 #include <config.h>
 #include <opm/simulators/wells/BlackoilWellModelGeneric.hpp>
@@ -156,6 +158,12 @@ loadRestartData(const data::Wells& rst_wells,
 
     using rt = data::Rates::opt;
     const auto np = phases.num_phases;
+
+    {
+        std::ofstream os("input.json");
+        auto json_string = rst_wells.json().dump();
+        os << json_string;
+    }
 
     std::vector< rt > phs( np );
     if( phases.phase_used[BlackoilPhases::Aqua] ) {

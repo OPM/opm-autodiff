@@ -36,6 +36,9 @@
 #include <unordered_map>
 #include <vector>
 
+#include <fstream>
+#include <iostream>
+
 #include <stddef.h>
 
 #include <opm/parser/eclipse/EclipseState/Runspec.hpp>
@@ -220,6 +223,13 @@ namespace Opm {
 
                 this->assignWellGuideRates(wsrpt);
                 this->assignShutConnections(wsrpt, this->reportStepIndex());
+
+                const auto& debug_config = this->wellState().debugConfig();
+                if (debug_config("RESTART")) {
+                    std::ofstream os("output.json");
+                    auto json_string = wsrpt.json().dump();
+                    os << json_string;
+                }
 
                 return wsrpt;
             }

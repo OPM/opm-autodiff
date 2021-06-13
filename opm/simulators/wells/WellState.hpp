@@ -32,6 +32,7 @@
 
 #include <opm/parser/eclipse/EclipseState/Schedule/Events.hpp>
 #include <opm/parser/eclipse/EclipseState/Schedule/Well/Well.hpp>
+#include <opm/common/utility/DebugConfig.hpp>
 
 #include <functional>
 #include <map>
@@ -346,6 +347,11 @@ public:
         return this->perfdata[well_index];
     }
 
+    const DebugConfig& debugConfig() const {
+        return this->debug_config;
+    }
+
+
 private:
     WellMapType wellMap_;
     // Use of std::optional<> here is a technical crutch, the
@@ -403,7 +409,7 @@ private:
     // Well potentials
     WellContainer<std::vector<double>> well_potentials_;
 
-
+    DebugConfig debug_config;
     data::Segment
     reportSegmentResults(const PhaseUsage& pu,
                          const int         well_id,
