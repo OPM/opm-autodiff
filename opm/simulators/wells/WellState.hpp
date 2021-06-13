@@ -32,6 +32,7 @@
 
 #include <opm/parser/eclipse/EclipseState/Schedule/Events.hpp>
 #include <opm/parser/eclipse/EclipseState/Schedule/Well/Well.hpp>
+#include <opm/common/utility/DebugConfig.hpp>
 
 #include <functional>
 #include <map>
@@ -345,6 +346,11 @@ public:
     const PerfData& perfData(std::size_t well_index) const {
         return this->perfdata[well_index];
     }
+
+    const DebugConfig& debugConfig() const {
+        return this->debug_config;
+    }
+
 
 private:
     WellMapType wellMap_;
