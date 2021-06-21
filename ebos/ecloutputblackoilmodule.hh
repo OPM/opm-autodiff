@@ -69,6 +69,18 @@ struct ForceDisableFluidInPlaceOutput<TypeTag, TTag::EclOutputBlackOil> {
     static constexpr bool value = false;
 };
 
+
+template<class TypeTag, class MyTypeTag>
+struct ForceDisableResvFluidInPlaceOutput {
+    using type = UndefinedProperty;
+};
+
+template<class TypeTag>
+struct ForceDisableResvFluidInPlaceOutput<TypeTag, TTag::EclOutputBlackOil> {
+    static constexpr bool value = false;
+};
+
+
 } // namespace Opm::Properties
 
 namespace Opm {
@@ -146,6 +158,7 @@ public:
         }
 
         this->forceDisableFipOutput_ = EWOMS_GET_PARAM(TypeTag, bool, ForceDisableFluidInPlaceOutput);
+        this->forceDisableFipresvOutput_ = EWOMS_GET_PARAM(TypeTag, bool, ForceDisableResvFluidInPlaceOutput);
     }
 
     /*!
@@ -155,6 +168,8 @@ public:
     {
         EWOMS_REGISTER_PARAM(TypeTag, bool, ForceDisableFluidInPlaceOutput,
                              "Do not print fluid-in-place values after each report step even if requested by the deck.");
+        EWOMS_REGISTER_PARAM(TypeTag, bool, ForceDisableResvFluidInPlaceOutput,
+                             "Do not print reservoir volumes values after each report step even if requested by the deck.");
     }
 
     /*!
