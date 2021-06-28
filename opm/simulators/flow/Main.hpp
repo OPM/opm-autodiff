@@ -97,11 +97,14 @@ namespace Opm {
     // with incorrect locale settings.
     resetLocale();
 
-# if HAVE_DUNE_FEM
+#if HAVE_DUNE_FEM
     Dune::Fem::MPIManager::initialize(argc, argv);
-# else
-    Dune::MPIHelper::instance(argc, argv);
-# endif
+#else
+#if HAVE_MPI
+    MPI_Init(&argc, &argv);
+#endif
+    EclGenericVanguard::setCommunication(EclGenericVanguard::CommunicationType());
+#endif
     FlowMainEbos<TypeTag> mainfunc(argc, argv, outputCout, outputFiles);
     return mainfunc.execute();
   }
@@ -361,12 +364,11 @@ namespace Opm
             Dune::Fem::MPIManager::initialize(argc_, argv_);
             int mpiRank = Dune::Fem::MPIManager::rank();
 #else
-            // the design of the plain dune MPIHelper class is quite flawed: there is no way to
-            // get the instance without having the argc and argv parameters available and it is
-            // not possible to determine the MPI rank and size without an instance. (IOW: the
-            // rank() and size() methods are supposed to be static.)
-            const auto& mpiHelper = Dune::MPIHelper::instance(argc_, argv_);
-            int mpiRank = mpiHelper.rank();
+#if HAVE_MPI
+            MPI_Init(&argc_, &argv_);
+#endif
+            EclGenericVanguard::setCommunication(EclGenericVanguard::CommunicationType());
+            int mpiRank = EclGenericVanguard::comm().rank();
 #endif
 
             // we always want to use the default locale, and thus spare us the trouble
