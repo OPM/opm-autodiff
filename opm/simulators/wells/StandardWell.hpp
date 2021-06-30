@@ -368,6 +368,15 @@ namespace Opm
                              double& perf_vap_oil_rate,
                              DeferredLogger& deferred_logger) const;
 
+        void computePerfRate2(const IntensiveQuantities& intQuants,
+                             const std::vector<Scalar>& mob,
+                             const Scalar& bhp,
+                             const double Tw,
+                             const int perf,
+                             const bool allow_cf,
+                             std::vector<Scalar>& cq_s,
+                             DeferredLogger& deferred_logger) const;
+
         void computeWellRatesWithBhpPotential(const Simulator& ebosSimulator,
                                               const double& bhp,
                                               std::vector<double>& well_flux,
@@ -386,6 +395,13 @@ namespace Opm
                          const int perf,
                          std::vector<EvalWell>& mob,
                          DeferredLogger& deferred_logger) const;
+
+        // get the mobility for specific perforation
+        void getMobility2(const Simulator& ebosSimulator,
+                         const int perf,
+                         std::vector<Scalar>& mob,
+                         DeferredLogger& deferred_logger) const;
+
 
         void updateWaterMobilityWithPolymer(const Simulator& ebos_simulator,
                                             const int perf,

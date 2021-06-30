@@ -143,6 +143,19 @@ protected:
                          double& perf_vap_oil_rate,
                          DeferredLogger& deferred_logger) const;
 
+    void computePerfRate2(const std::vector<Scalar>& mob,
+                         const Scalar& pressure,
+                         const Scalar& bhp,
+                         const Scalar& rs,
+                         const Scalar& rv,
+                         std::vector<Scalar>& b_perfcells_dense,
+                         const double Tw,
+                         const int perf,
+                         const bool allow_cf,
+                         const bool enable_polymermw,
+                         std::vector<Scalar>& cq_s,
+                         DeferredLogger& deferred_logger) const;
+
     ConvergenceReport getWellConvergence(const WellState& well_state,
                                          const std::vector<double>& B_avg,
                                          const double tol_wells,

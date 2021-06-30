@@ -1117,6 +1117,131 @@ computePerfRate(const std::vector<EvalWell>& mob,
 template<class FluidSystem, class Indices, class Scalar>
 void
 StandardWellEval<FluidSystem,Indices,Scalar>::
+computePerfRate2(const std::vector<Scalar>& mob,
+                const Scalar& pressure,
+                const Scalar& bhp,
+                const Scalar& rs,
+                const Scalar& rv,
+                std::vector<Scalar>& b_perfcells_dense,
+                const double Tw,
+                const int perf,
+                const bool allow_cf,
+                const bool enable_polymermw,
+                std::vector<Scalar>& cq_s,
+                DeferredLogger& deferred_logger) const
+{
+    // Pressure drawdown (also used to determine direction of flow)
+    const Scalar well_pressure = bhp + this->perf_pressure_diffs_[perf];
+    Scalar drawdown = pressure - well_pressure;
+
+    if (enable_polymermw) {
+        if (baseif_.isInjector()) {
+            const int pskin_index = Bhp + 1 + baseif_.numPerfs() + perf;
+            const Scalar& skin_pressure = primary_variables_evaluation_[pskin_index].value();
+            drawdown += skin_pressure;
+        }
+    }
+
+    // producing perforations
+    if ( drawdown > 0 )  {
+        //Do nothing if crossflow is not allowed
+        if (!allow_cf && baseif_.isInjector()) {
+            return;
+        }
+
+        // compute component volumetric rates at standard conditions
+        for (int componentIdx = 0; componentIdx < baseif_.numComponents(); ++componentIdx) {
+            const Scalar cq_p = - Tw * (mob[componentIdx] * drawdown);
+            cq_s[componentIdx] = b_perfcells_dense[componentIdx] * cq_p;
+        }
+
+        if (FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx) && FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)) {
+            const unsigned oilCompIdx = Indices::canonicalToActiveComponentIndex(FluidSystem::oilCompIdx);
+            const unsigned gasCompIdx = Indices::canonicalToActiveComponentIndex(FluidSystem::gasCompIdx);
+            const Scalar cq_sOil = cq_s[oilCompIdx];
+            const Scalar cq_sGas = cq_s[gasCompIdx];
+            const Scalar dis_gas = rs * cq_sOil;
+            const Scalar vap_oil = rv * cq_sGas;
+
+            cq_s[gasCompIdx] += dis_gas;
+            cq_s[oilCompIdx] += vap_oil;
+
+        }
+
+    } else {
+        //Do nothing if crossflow is not allowed
+        if (!allow_cf && baseif_.isProducer()) {
+            return;
+        }
+
+        // Using total mobilities
+        Scalar total_mob_dense = mob[0];
+        for (int componentIdx = 1; componentIdx < baseif_.numComponents(); ++componentIdx) {
+            total_mob_dense += mob[componentIdx];
+        }
+
+        // injection perforations total volume rates
+        const Scalar cqt_i = - Tw * (total_mob_dense * drawdown);
+
+        // surface volume fraction of fluids within wellbore
+        std::vector<Scalar> cmix_s(baseif_.numComponents(), 0.0);
+        for (int componentIdx = 0; componentIdx < baseif_.numComponents(); ++componentIdx) {
+            cmix_s[componentIdx] = wellSurfaceVolumeFraction(componentIdx).value();
+        }
+
+        // compute volume ratio between connection at standard conditions
+        Scalar volumeRatio = 0.0;
+        if (FluidSystem::phaseIsActive(FluidSystem::waterPhaseIdx)) {
+            const unsigned waterCompIdx = Indices::canonicalToActiveComponentIndex(FluidSystem::waterCompIdx);
+            volumeRatio += cmix_s[waterCompIdx] / b_perfcells_dense[waterCompIdx];
+        }
+
+        if constexpr (Indices::enableSolvent) {
+            volumeRatio += cmix_s[Indices::contiSolventEqIdx] / b_perfcells_dense[Indices::contiSolventEqIdx];
+        }
+
+        if (FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx) && FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)) {
+            const unsigned oilCompIdx = Indices::canonicalToActiveComponentIndex(FluidSystem::oilCompIdx);
+            const unsigned gasCompIdx = Indices::canonicalToActiveComponentIndex(FluidSystem::gasCompIdx);
+            // Incorporate RS/RV factors if both oil and gas active
+            const Scalar d = 1.0 - rv * rs;
+
+            if (d == 0.0) {
+                OPM_DEFLOG_THROW(NumericalIssue, "Zero d value obtained for well " << baseif_.name() << " during flux calcuation"
+                                              << " with rs " << rs << " and rv " << rv, deferred_logger);
+            }
+
+            const Scalar tmp_oil = (cmix_s[oilCompIdx] - rv * cmix_s[gasCompIdx]) / d;
+            //std::cout << "tmp_oil " <<tmp_oil << std::endl;
+            volumeRatio += tmp_oil / b_perfcells_dense[oilCompIdx];
+
+            const Scalar tmp_gas = (cmix_s[gasCompIdx] - rs * cmix_s[oilCompIdx]) / d;
+            //std::cout << "tmp_gas " <<tmp_gas << std::endl;
+            volumeRatio += tmp_gas / b_perfcells_dense[gasCompIdx];
+        }
+        else {
+            if (FluidSystem::phaseIsActive(FluidSystem::oilPhaseIdx)) {
+                const unsigned oilCompIdx = Indices::canonicalToActiveComponentIndex(FluidSystem::oilCompIdx);
+                volumeRatio += cmix_s[oilCompIdx] / b_perfcells_dense[oilCompIdx];
+            }
+            if (FluidSystem::phaseIsActive(FluidSystem::gasPhaseIdx)) {
+                const unsigned gasCompIdx = Indices::canonicalToActiveComponentIndex(FluidSystem::gasCompIdx);
+                volumeRatio += cmix_s[gasCompIdx] / b_perfcells_dense[gasCompIdx];
+            }
+        }
+
+        // injecting connections total volumerates at standard conditions
+        Scalar cqt_is = cqt_i/volumeRatio;
+        //std::cout << "volrat " << volumeRatio << " " << volrat_perf_[perf] << std::endl;
+        for (int componentIdx = 0; componentIdx < baseif_.numComponents(); ++componentIdx) {
+            cq_s[componentIdx] = cmix_s[componentIdx] * cqt_is; // * b_perfcells_dense[phase];
+        }
+    }
+}
+
+template<class FluidSystem, class Indices, class Scalar>
+void
+StandardWellEval<FluidSystem,Indices,Scalar>::
 init(std::vector<double>& perf_depth,
      const std::vector<double>& depth_arg,
      const int num_cells,
