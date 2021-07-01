@@ -256,6 +256,7 @@ endif()
 
 opm_set_test_driver(${CMAKE_CURRENT_SOURCE_DIR}/tests/run-parallel-unitTest.sh "")
 
+add_definitions(-DBOOST_BIND_GLOBAL_PLACEHOLDERS)
 opm_add_test(test_gatherconvergencereport
   DEPENDS "opmsimulators"
   LIBRARIES opmsimulators ${Boost_UNIT_TEST_FRAMEWORK_LIBRARY}
