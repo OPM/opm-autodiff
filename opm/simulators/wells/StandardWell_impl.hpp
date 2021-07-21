@@ -1373,9 +1373,9 @@ namespace Opm
     void
     StandardWell<TypeTag>::
     computeWellRatesWithBhpPotential(const Simulator& ebosSimulator,
-                            const double& bhp,
-                            std::vector<double>& well_flux,
-                            DeferredLogger& deferred_logger)
+                                     const double& bhp,
+                                     std::vector<double>& well_flux,
+                                     DeferredLogger& deferred_logger) const
     {
 
         // iterate to get a more accurate well density
@@ -1392,20 +1392,30 @@ namespace Opm
         }
         well_state_copy.update_bhp(index_of_well_, bhp);
 
+        // initialized the well rates with the potentials i.e. the well rates based on bhp
+        const int np = number_of_phases_;
+        const double sign = well_ecl_.isInjector() ? 1.0 : -1.0;
+        for (int phase = 0; phase < np; ++phase){
+            well_state_copy.wellRates(index_of_well_)[phase]
+                    = sign * well_state_copy.wellPotentials(index_of_well_)[phase];
+        }
+        // creating a copy of the well itself, to avoid messing up the explicit informations
+        // during this copy, the only information not copied properly is the well controls
+        StandardWell<TypeTag> well(*this);
+        well.calculateExplicitQuantities(ebosSimulator, well_state_copy, deferred_logger);
+
         const double dt = ebosSimulator.timeStepSize();
-        bool converged = this->iterateWellEquations(ebosSimulator, dt, well_state_copy, group_state, deferred_logger);
+        bool converged = well.iterateWellEquations(ebosSimulator, dt, well_state_copy, group_state, deferred_logger);
         if (!converged) {
             const std::string msg = " well " + name() + " did not get converged during well potential calculations "
                                                         "returning zero values for the potential";
             deferred_logger.debug(msg);
             return;
         }
-        updatePrimaryVariables(well_state_copy, deferred_logger);
-        computeWellConnectionPressures(ebosSimulator, well_state_copy);
-        initPrimaryVariablesEvaluation();
-
-
-        computeWellRatesWithBhp(ebosSimulator, bhp, well_flux, deferred_logger);
+        well.updatePrimaryVariables(well_state_copy, deferred_logger);
+        well.computeWellConnectionPressures(ebosSimulator, well_state_copy);
+        well.initPrimaryVariablesEvaluation();
+        well.computeWellRatesWithBhp(ebosSimulator, bhp, well_flux, deferred_logger);
     }
 
 
@@ -1427,13 +1437,13 @@ namespace Opm
             auto bhp_at_thp_limit = computeBhpAtThpLimitInj(ebos_simulator, summary_state, deferred_logger);
             if (bhp_at_thp_limit) {
                 const double bhp = std::min(*bhp_at_thp_limit, controls.bhp_limit);
-                computeWellRatesWithBhp(ebos_simulator, bhp, potentials, deferred_logger);
+                computeWellRatesWithBhpPotential(ebos_simulator, bhp, potentials, deferred_logger);
             } else {
                 deferred_logger.warning("FAILURE_GETTING_CONVERGED_POTENTIAL",
                                         "Failed in getting converged thp based potential calculation for well "
                                         + name() + ". Instead the bhp based value is used");
                 const double bhp = controls.bhp_limit;
-                computeWellRatesWithBhp(ebos_simulator, bhp, potentials, deferred_logger);
+                computeWellRatesWithBhpPotential(ebos_simulator, bhp, potentials, deferred_logger);
             }
         } else {
             computeWellRatesWithThpAlqProd(
@@ -1460,7 +1470,7 @@ namespace Opm
         if (bhp_at_thp_limit) {
             const auto& controls = well_ecl_.productionControls(summary_state);
             bhp = std::max(*bhp_at_thp_limit, controls.bhp_limit);
-            computeWellRatesWithBhp(ebos_simulator, bhp, potentials, deferred_logger);
+            computeWellRatesWithBhpPotential(ebos_simulator, bhp, potentials, deferred_logger);
         }
         else {
             deferred_logger.warning("FAILURE_GETTING_CONVERGED_POTENTIAL",
@@ -1468,7 +1478,7 @@ namespace Opm
                 + name() + ". Instead the bhp based value is used");
             const auto& controls = well_ecl_.productionControls(summary_state);
             bhp = controls.bhp_limit;
-            computeWellRatesWithBhp(ebos_simulator, bhp, potentials, deferred_logger);
+            computeWellRatesWithBhpPotential(ebos_simulator, bhp, potentials, deferred_logger);
         }
         return bhp;
     }
@@ -1557,21 +1567,16 @@ namespace Opm
             return;
         }
 
-        // creating a copy of the well itself, to avoid messing up the explicit informations
-        // during this copy, the only information not copied properly is the well controls
-        StandardWell<TypeTag> well(*this);
-        well.calculateExplicitQuantities(ebosSimulator, well_state, deferred_logger);
-
         // does the well have a THP related constraint?
         const auto& summaryState = ebosSimulator.vanguard().summaryState();
-        if (!well.Base::wellHasTHPConstraints(summaryState)) {
+        if (!Base::wellHasTHPConstraints(summaryState)) {
             // get the bhp value based on the bhp constraints
-            const double bhp = well.mostStrictBhpFromBhpLimits(summaryState);
+            const double bhp = mostStrictBhpFromBhpLimits(summaryState);
             assert(std::abs(bhp) != std::numeric_limits<double>::max());
-            well.computeWellRatesWithBhpPotential(ebosSimulator, bhp, well_potentials, deferred_logger);
+            computeWellRatesWithBhpPotential(ebosSimulator, bhp, well_potentials, deferred_logger);
         } else {
             // the well has a THP related constraint
-            well_potentials = well.computeWellPotentialWithTHP(ebosSimulator, deferred_logger, well_state);
+            well_potentials = computeWellPotentialWithTHP(ebosSimulator, deferred_logger, well_state);
         }
     }
 

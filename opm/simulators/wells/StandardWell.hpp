@@ -371,7 +371,7 @@ namespace Opm
         void computeWellRatesWithBhpPotential(const Simulator& ebosSimulator,
                                               const double& bhp,
                                               std::vector<double>& well_flux,
-                                              DeferredLogger& deferred_logger);
+                                              DeferredLogger& deferred_logger) const;
 
         std::vector<double> computeWellPotentialWithTHP(
             const Simulator& ebosSimulator,
